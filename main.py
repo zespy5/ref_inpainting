@@ -7,8 +7,7 @@ import cv2
 from torchvision.transforms import v2
 
 from omegaconf import OmegaConf
-from einops import rearrange, repeat
-from tqdm import tqdm
+from einops import rearrange
 from huggingface_hub import hf_hub_download
 from diffusers import DiffusionPipeline, EulerAncestralDiscreteScheduler
 
@@ -17,7 +16,7 @@ from src.utils.camera_util import (
     get_zero123plus_input_cameras,
     spherical_camera_pose
 )
-from src.utils.mesh_util import save_obj, save_obj_with_mtl
+from pytorch_lightning import seed_everything
 from src.utils.infer_util import remove_background, resize_foreground, save_video
 
 from pathlib import Path
@@ -27,6 +26,9 @@ from cldm.model import create_model, load_state_dict
 from utils import *
 from inference import inference_single_image
 
+import time
+import json
+
 
 def InstantMesh(config_path, input_object_path, azimuth, elevation, device='cuda'):
     
@@ -34,7 +36,8 @@ def InstantMesh(config_path, input_object_path, azimuth, elevation, device='cuda
     config = OmegaConf.load(config_file_name)
     config_name = config_file_name.stem
     model_config = config.model_config
-    infer_config = config.infer_config
+    
+    load_start = time.time()
     
     device = torch.device('cuda')
     
@@ -65,6 +68,13 @@ def InstantMesh(config_path, input_object_path, azimuth, elevation, device='cuda
     
     rembg_session = rembg.new_session()
     
+    load_end = time.time()
+    
+    print(f'Instant mesh model load time {load_end-load_start:3f} sec')
+    
+    inference_start = time.time()
+    
+    
     input_image = Image.open(input_object_path)
     input_image = remove_background(input_image, rembg_session)
     input_image = resize_foreground(input_image, 0.85)
@@ -89,6 +99,8 @@ def InstantMesh(config_path, input_object_path, azimuth, elevation, device='cuda
         
         novel_view_image = Image.fromarray((frame.permute(1, 2, 0).cpu().numpy() * 255).astype(np.uint8))
 
+    inference_end = time.time()
+    print(f'Instant mesh inference time {inference_end-inference_start:3f} sec')
     return zero123plus_generate_image, novel_view_image
 
 def AnyDoor(config_path, venue_path, object_img, object_size, object_position, device='cuda'):
@@ -99,10 +111,16 @@ def AnyDoor(config_path, venue_path, object_img, object_size, object_position, d
     model_ckpt =  config.pretrained_model
     model_config = config.config_file
 
+    load_start = time.time()
+    
     model = create_model(model_config ).cpu()
     model.load_state_dict(load_state_dict(model_ckpt, location='cuda'))
     model = model.to(device)
-    ddim_sampler = DDIMSampler(model)
+    load_end = time.time()
+    
+    print(f'Anydoor model load time {load_end-load_start:3f} sec')
+    
+    inference_start = time.time()
     
     venue_image = cv2.imread(venue_path.as_posix(), cv2.IMREAD_COLOR)
     venue_image = cv2.cvtColor(venue_image, cv2.COLOR_BGR2RGB)
@@ -113,24 +131,59 @@ def AnyDoor(config_path, venue_path, object_img, object_size, object_position, d
     
     location_mask, _ = make_mask_from_point(venue_image, object_mask_image, object_size, object_position)
     
-    gen_image, hint = inference_single_image(ddim_sampler, object_img, object_mask_image,
+    gen_image, hint = inference_single_image(model, object_img, object_mask_image,
                                              venue_image.copy(), location_mask,
                                              guidance_scale=3.0)
-    
-    return Image.fromarray(gen_image.astype(np.uint8))
+    inference_end = time.time()
+    print(f'Anydoor inference time {inference_end-inference_start:3f} sec')
+    gen_image = Image.fromarray(gen_image.astype(np.uint8))
+    location_mask = Image.fromarray(location_mask.astype(np.uint8))
+    return gen_image, location_mask
+
 
 
 if __name__ == '__main__':
-    confg = 'configs/instant-mesh-large.yaml'
-    input_img = '../resized_data/objects_data/truck/truck_0.png'
-    input_venue = '../resized_data/venue/0_highway.jpg'
-    z, n = InstantMesh(confg, input_img, 60, 0)
-    z.save('zero.png')
-    n.save('new.png')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--instantmesh_config', type=str,
+                        default='configs/instant-mesh-large.yaml')
+    parser.add_argument('--anydoor_config', type=str,
+                        default='configs/anydoor_inference.yaml')
+    parser.add_argument('--bg_img', type=str, required=True)
+    parser.add_argument('--object_img', type=str, required=True)
+    parser.add_argument('--azimuth', type=float, default=60)
+    parser.add_argument('--elevation', type=float, default=0)
+    parser.add_argument('--object_size', type=float, default=0.5)
+    parser.add_argument('--object_location', type=json.loads, default="[0.6, 0.5]")
+    parser.add_argument('--output_dir', type=str, default='output')
+    parser.add_argument('--seed', type=int, default=0)
     
-    anydoor_config = 'configs/inference.yaml'
-    anydoorgen = AnyDoor(anydoor_config, input_venue, n, (0.4,0.4), (0.5,0.6))
-    anydoorgen.save('anydoor.png')
+    opt = parser.parse_args()
+    
+    seed_everything(opt.seed)
+    instatmesh_config = opt.instantmesh_config
+    anydoor_config = opt.anydoor_config
+    bg_img = opt.bg_img
+    object_img = opt.object_img
+    azimuth = opt.azimuth
+    elevation = opt.elevation
+    object_size = [opt.object_size, opt.object_size,]
+    object_location = opt.object_location
+    output_dir = opt.output_dir
+    
+    output = Path(output_dir)
+    output.mkdir(exist_ok=True)
+    
+    z, n = InstantMesh(instatmesh_config, object_img, azimuth, elevation)
+    anydoorgen, location_mask = AnyDoor(anydoor_config, bg_img, n, object_size, object_location)
+   
+    zero123_result = output/'zero123plus.png'
+    novel_view = output/f'azimuth={azimuth},elevation={elevation}_view.png'
+    anydoor_result = output/'anydoor.png'
+    location_mask_results = output/'location_mask.png'
+    z.save(zero123_result)
+    n.save(novel_view)
+    anydoorgen.save(anydoor_result)
+    location_mask.save(location_mask_results)
     
     
     

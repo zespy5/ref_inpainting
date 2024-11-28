@@ -24,14 +24,14 @@ if save_memory:
     enable_sliced_attention()
 
 
-config = OmegaConf.load('./configs/inference.yaml')
+'''config = OmegaConf.load('./configs/inference.yaml')
 model_ckpt =  config.pretrained_model
 model_config = config.config_file
 
 model = create_model(model_config ).cpu()
 model.load_state_dict(load_state_dict(model_ckpt, location='cuda'))
 model = model.cuda()
-ddim_sampler = DDIMSampler(model)
+ddim_sampler = DDIMSampler(model)'''
 
 
 
@@ -51,11 +51,11 @@ def process_pairs(ref_image, ref_mask, tar_image, tar_mask):
     # ========= Reference ===========
     # ref expand 
     ref_box_yyxx = get_bbox_from_mask(ref_mask)
-    
+
     # ref filter mask 
     ref_mask_3 = np.stack([ref_mask,ref_mask,ref_mask],-1)
     masked_ref_image = ref_image * ref_mask_3 + np.ones_like(ref_image) * 255 * (1-ref_mask_3)
-    
+
     y1,y2,x1,x2 = ref_box_yyxx
     masked_ref_image = masked_ref_image[y1:y2,x1:x2,:]
     ref_mask = ref_mask[y1:y2,x1:x2]
@@ -85,15 +85,16 @@ def process_pairs(ref_image, ref_mask, tar_image, tar_mask):
 
     # ========= Target ===========
     tar_box_yyxx = get_bbox_from_mask(tar_mask)
-    #tar_box_yyxx = expand_bbox(tar_mask, tar_box_yyxx, ratio=[1.1,1.2])
     tar_box_yyxx = expand_bbox(tar_mask, tar_box_yyxx, ratio=[1.1,1.2])
 
     # crop
-    #tar_box_yyxx_crop =  expand_bbox(tar_image, tar_box_yyxx, ratio=[1.5, 3])    #1.2 1.6
-    tar_box_yyxx_crop =  expand_bbox(tar_image, tar_box_yyxx, ratio=[1.5, 1.6]) 
+    tar_box_yyxx_crop =  expand_bbox(tar_image, tar_box_yyxx, ratio=[1.5, 1.6])    #1.2 1.6
     tar_box_yyxx_crop = box2squre(tar_image, tar_box_yyxx_crop) # crop box
     y1,y2,x1,x2 = tar_box_yyxx_crop
-
+    
+    #collage_mask = tar_mask[y1:y2,x1:x2].astype(np.float32)/255
+    #collage_mask = np.stack([collage_mask]*3, -1)
+    
     cropped_target_image = tar_image[y1:y2,x1:x2,:]
     tar_box_yyxx = box_in_box(tar_box_yyxx, tar_box_yyxx_crop)
     y1,y2,x1,x2 = tar_box_yyxx
@@ -105,6 +106,7 @@ def process_pairs(ref_image, ref_mask, tar_image, tar_mask):
 
     collage = cropped_target_image.copy() 
     collage[y1:y2,x1:x2,:] = ref_image_collage
+
 
     collage_mask = cropped_target_image.copy() * 0.0
     collage_mask[y1:y2,x1:x2,:] = 1.0
@@ -154,7 +156,9 @@ def crop_back( pred, tar_image,  extra_sizes, tar_box_yyxx_crop):
     return gen_image
 
 
-def inference_single_image(ddim_sampler, ref_image, ref_mask, tar_image, tar_mask, guidance_scale = 5.0, ref2_image=None, ref2_mask=None):
+def inference_single_image(model, ref_image, ref_mask, tar_image, tar_mask, guidance_scale = 5.0, ref2_image=None, ref2_mask=None):
+    ddim_sampler = DDIMSampler(model)
+    
     item = process_pairs(ref_image, ref_mask, tar_image, tar_mask)
     item2 = process_pairs(ref2_image, ref2_mask, tar_image, tar_mask) if ref2_image != None else item
     
@@ -170,8 +174,8 @@ def inference_single_image(ddim_sampler, ref_image, ref_mask, tar_image, tar_mas
     ref = cv2.resize(ref.astype(np.uint8), (512,512))
 
     seed = random.randint(0, 65535)
-    if save_memory:
-        model.low_vram_shift(is_diffusing=False)
+    
+    
 
     ref = item['ref']
     tar = item['jpg'] 

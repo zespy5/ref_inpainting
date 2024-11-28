@@ -1,3 +1,0 @@
-pretrained_model: /home/miruware/PNU_CVLAB/suresoft/reference_inpaint/InstantMesh/ckpts/epoch=1-step=8687.ckpt
-config_file: /home/miruware/PNU_CVLAB/suresoft/reference_inpaint/InstantMesh/configs/anydoor.yaml
-save_memory: False

@@ -80,6 +80,6 @@ model:
 
     cond_stage_config:
       target: ldm.modules.encoders.modules.FrozenDinoV2Encoder
-      weight: /home/miruware/PNU_CVLAB/suresoft/reference_inpaint/InstantMesh/ckpts/dinov2_vitg14_reg4_pretrain.pth
+      weight: ckpts/dinov2_vitg14_reg4_pretrain.pth
     
 
